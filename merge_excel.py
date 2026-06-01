@@ -5,7 +5,6 @@ from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Alignment
 from openpyxl.utils import get_column_letter
 from io import BytesIO
-import tempfile
 import os
 
 st.set_page_config(page_title="Advanced Excel Merger", layout="wide")
@@ -55,67 +54,68 @@ def detect_header_row(df):
     return best_row
 
 
+def read_excel_bytes(file_bytes, header=None, skiprows=None):
+    try:
+        return pd.read_excel(BytesIO(file_bytes), header=header, skiprows=skiprows)
+    except Exception:
+        return pd.read_excel(
+            BytesIO(file_bytes),
+            header=header,
+            skiprows=skiprows,
+            engine="xlrd",
+        )
+
+
 # ---------------- MAIN PROCESS ---------------- #
 
 if uploaded_files:
 
     merged_df = pd.DataFrame()
-    master_columns = None
+    master_columns = []
     template_styles = {}
 
     try:
 
         for index, file in enumerate(uploaded_files):
 
-            # Read raw excel
-            raw_df = pd.read_excel(file, header=None)
+            file_bytes = file.read()
 
-            # Detect header row
+            raw_df = read_excel_bytes(file_bytes, header=None)
+
             header_row = detect_header_row(raw_df)
 
-            # Read actual data
-            df = pd.read_excel(file, header=header_row)
+            df = read_excel_bytes(
+                file_bytes,
+                header=0,
+                skiprows=header_row,
+            )
 
-            # Remove fully empty rows
             df = df.dropna(how="all")
-
-            # Remove empty columns
             df = df.dropna(axis=1, how="all")
 
-            # Store master headers
-            if master_columns is None:
-                master_columns = list(df.columns)
+            for column in df.columns:
+                if column not in master_columns:
+                    master_columns.append(column)
 
-            # Match columns automatically
-            df.columns = master_columns[:len(df.columns)]
+            df = df.reindex(columns=master_columns)
 
-            # Append all rows
-            merged_df = pd.concat([merged_df, df], ignore_index=True)
+            merged_df = pd.concat([merged_df, df], ignore_index=True, sort=False)
 
-            # Save formatting from first file
             if index == 0:
+                file_ext = os.path.splitext(file.name)[1].lower()
+                if file_ext in [".xlsx", ".xlsm"]:
+                    wb = load_workbook(BytesIO(file_bytes))
+                    ws = wb.active
 
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-                temp_file.write(file.getvalue())
-                temp_file.close()
-
-                wb = load_workbook(temp_file.name)
-                ws = wb.active
-
-                for row in ws.iter_rows():
-
-                    for cell in row:
-
-                        if cell.has_style:
-
-                            template_styles[cell.coordinate] = {
-                                "font": cell.font.copy(),
-                                "fill": cell.fill.copy(),
-                                "border": cell.border.copy(),
-                                "alignment": cell.alignment.copy()
-                            }
-
-                os.unlink(temp_file.name)
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            if cell.has_style:
+                                template_styles[cell.coordinate] = {
+                                    "font": cell.font.copy(),
+                                    "fill": cell.fill.copy(),
+                                    "border": cell.border.copy(),
+                                    "alignment": cell.alignment.copy(),
+                                }
 
         # ---------------- CREATE OUTPUT ---------------- #
 
